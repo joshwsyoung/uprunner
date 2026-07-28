@@ -1,6 +1,9 @@
 package com.uprunner.app.ui.plan
 
-import android.os.Bundle
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -11,20 +14,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.uprunner.core.model.GpxTrack
 import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 
@@ -34,18 +41,32 @@ import org.maplibre.geojson.Point
  */
 const val OPENFREEMAP_LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
-private const val ROUTE_SOURCE_ID = "uprunner-route-source"
-private const val ROUTE_LINE_LAYER_ID = "uprunner-route-line"
+private const val LOADED_TRACK_SOURCE_ID = "uprunner-loaded-track-source"
+private const val LOADED_TRACK_LINE_LAYER_ID = "uprunner-loaded-track-line"
+private const val PLANNED_ROUTE_SOURCE_ID = "uprunner-planned-route-source"
+private const val PLANNED_ROUTE_LINE_LAYER_ID = "uprunner-planned-route-line"
+private const val WAYPOINTS_SOURCE_ID = "uprunner-waypoints-source"
+private const val WAYPOINTS_CIRCLE_LAYER_ID = "uprunner-waypoints-circle"
+
+private const val DEFAULT_LOCAL_ZOOM = 14.0
+private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
 
 /**
  * Full-screen MapLibre map for the Plan tab (spec §3 Tab 2). Not yet doing 3D terrain/DEM
  * hillshading — that's a deliberately deferred fast-follow, not attempted in this pass.
+ *
+ * Two independently rendered lines can be visible at once: [track] (a loaded GPX file, blue)
+ * and [plannedRoutePoints] (a tap-to-place-waypoints route snapped to roads/trails via
+ * Valhalla, orange), plus [waypoints] markers for the route currently being planned.
  */
 @Composable
 fun UprunnerMap(
     track: GpxTrack?,
+    waypoints: List<Pair<Double, Double>> = emptyList(),
+    plannedRoutePoints: List<Pair<Double, Double>> = emptyList(),
     modifier: Modifier = Modifier,
     onMapReady: (MapLibreMap) -> Unit = {},
+    onMapClick: (Pair<Double, Double>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -74,9 +95,19 @@ fun UprunnerMap(
         modifier = modifier,
         factory = {
             mapView.getMapAsync { map ->
+                map.addOnMapClickListener { latLng ->
+                    onMapClick(latLng.latitude to latLng.longitude)
+                    true
+                }
                 map.setStyle(Style.Builder().fromUri(OPENFREEMAP_LIBERTY_STYLE_URL)) { style ->
-                    drawTrack(style, track)
-                    track?.let { fitCameraToTrack(map, it) }
+                    renderLoadedTrack(style, track)
+                    renderPlannedRoute(style, plannedRoutePoints)
+                    renderWaypoints(style, waypoints)
+                    if (track != null) {
+                        fitCameraToPoints(map, track.points.map { it.latitude to it.longitude })
+                    } else {
+                        centerOnLastKnownLocationOrFallback(context, map)
+                    }
                 }
                 maplibreMap = map
                 onMapReady(map)
@@ -87,32 +118,78 @@ fun UprunnerMap(
             val map = maplibreMap
             val style = map?.style
             if (map != null && style != null) {
-                drawTrack(style, track)
-                track?.let { fitCameraToTrack(map, it) }
+                renderLoadedTrack(style, track)
+                renderPlannedRoute(style, plannedRoutePoints)
+                renderWaypoints(style, waypoints)
+                track?.let { fitCameraToPoints(map, it.points.map { p -> p.latitude to p.longitude }) }
             }
         },
     )
 }
 
-private fun drawTrack(style: Style, track: GpxTrack?) {
-    style.getLayer(ROUTE_LINE_LAYER_ID)?.let { style.removeLayer(it) }
-    style.getSource(ROUTE_SOURCE_ID)?.let { style.removeSource(it) }
-    if (track == null || track.points.size < 2) return
+private fun renderLoadedTrack(style: Style, track: GpxTrack?) {
+    renderLine(style, LOADED_TRACK_SOURCE_ID, LOADED_TRACK_LINE_LAYER_ID, "#2962FF", track?.points?.map { it.latitude to it.longitude })
+}
 
-    val points = track.points.map { Point.fromLngLat(it.longitude, it.latitude) }
-    val feature = Feature.fromGeometry(LineString.fromLngLats(points))
-    style.addSource(GeoJsonSource(ROUTE_SOURCE_ID, feature))
+private fun renderPlannedRoute(style: Style, points: List<Pair<Double, Double>>) {
+    renderLine(style, PLANNED_ROUTE_SOURCE_ID, PLANNED_ROUTE_LINE_LAYER_ID, "#FF6D00", points)
+}
+
+private fun renderLine(style: Style, sourceId: String, layerId: String, colorHex: String, points: List<Pair<Double, Double>>?) {
+    style.getLayer(layerId)?.let { style.removeLayer(it) }
+    style.getSource(sourceId)?.let { style.removeSource(it) }
+    if (points == null || points.size < 2) return
+
+    val lineString = LineString.fromLngLats(points.map { (lat, lon) -> Point.fromLngLat(lon, lat) })
+    style.addSource(GeoJsonSource(sourceId, Feature.fromGeometry(lineString)))
     style.addLayer(
-        LineLayer(ROUTE_LINE_LAYER_ID, ROUTE_SOURCE_ID).withProperties(
-            PropertyFactory.lineColor("#2962FF"),
+        LineLayer(layerId, sourceId).withProperties(
+            PropertyFactory.lineColor(colorHex),
             PropertyFactory.lineWidth(4f),
         ),
     )
 }
 
-private fun fitCameraToTrack(map: MapLibreMap, track: GpxTrack) {
-    if (track.points.size < 2) return
+private fun renderWaypoints(style: Style, waypoints: List<Pair<Double, Double>>) {
+    style.getLayer(WAYPOINTS_CIRCLE_LAYER_ID)?.let { style.removeLayer(it) }
+    style.getSource(WAYPOINTS_SOURCE_ID)?.let { style.removeSource(it) }
+    if (waypoints.isEmpty()) return
+
+    val features = waypoints.map { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) }
+    style.addSource(GeoJsonSource(WAYPOINTS_SOURCE_ID, FeatureCollection.fromFeatures(features)))
+    style.addLayer(
+        CircleLayer(WAYPOINTS_CIRCLE_LAYER_ID, WAYPOINTS_SOURCE_ID).withProperties(
+            PropertyFactory.circleColor("#FF6D00"),
+            PropertyFactory.circleRadius(6f),
+            PropertyFactory.circleStrokeColor("#FFFFFF"),
+            PropertyFactory.circleStrokeWidth(2f),
+        ),
+    )
+}
+
+private fun fitCameraToPoints(map: MapLibreMap, points: List<Pair<Double, Double>>) {
+    if (points.size < 2) return
     val boundsBuilder = LatLngBounds.Builder()
-    track.points.forEach { boundsBuilder.include(LatLng(it.latitude, it.longitude)) }
+    points.forEach { (lat, lon) -> boundsBuilder.include(LatLng(lat, lon)) }
     map.easeCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 96))
+}
+
+/** Fixes the map defaulting to a zoom-0 world view when there's nothing loaded yet. */
+private fun centerOnLastKnownLocationOrFallback(context: Context, map: MapLibreMap) {
+    val hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val lastKnown = if (hasLocationPermission) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        locationManager.allProviders.firstNotNullOfOrNull { provider ->
+            runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+        }
+    } else {
+        null
+    }
+
+    map.cameraPosition = if (lastKnown != null) {
+        CameraPosition.Builder().target(LatLng(lastKnown.latitude, lastKnown.longitude)).zoom(DEFAULT_LOCAL_ZOOM).build()
+    } else {
+        CameraPosition.Builder().target(LatLng(0.0, 0.0)).zoom(NO_LOCATION_FALLBACK_ZOOM).build()
+    }
 }

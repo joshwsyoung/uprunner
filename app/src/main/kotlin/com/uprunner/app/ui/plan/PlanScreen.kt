@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.MapLibreMap
 
 @Composable
@@ -41,15 +43,32 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
     Box(modifier = Modifier.fillMaxSize()) {
         UprunnerMap(
             track = uiState.track,
+            waypoints = uiState.waypoints,
+            plannedRoutePoints = uiState.plannedRoutePoints,
             modifier = Modifier.fillMaxSize(),
             onMapReady = { map = it },
+            onMapClick = viewModel::addWaypoint,
         )
+
+        // Appetize's cloud emulator (and any mouse-only input) can't pinch-to-zoom, so these
+        // are here for testability as much as for on-device convenience.
+        Column(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FloatingActionButton(onClick = { map?.animateCamera(CameraUpdateFactory.zoomIn()) }) {
+                Text("+", style = MaterialTheme.typography.headlineSmall)
+            }
+            FloatingActionButton(onClick = { map?.animateCamera(CameraUpdateFactory.zoomOut()) }) {
+                Text("−", style = MaterialTheme.typography.headlineSmall)
+            }
+        }
 
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .heightIn(max = 320.dp),
+                .heightIn(max = 380.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -76,6 +95,32 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
                     }
                 }
 
+                Text(
+                    "Tap the map to plan a route (snapped to roads/trails)",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Button(onClick = viewModel::clearWaypoints, enabled = uiState.waypoints.isNotEmpty()) {
+                        Text("Clear Waypoints")
+                    }
+                    Button(
+                        onClick = viewModel::savePlannedRoute,
+                        enabled = uiState.plannedRoutePoints.size >= 2 && !uiState.isRouting,
+                    ) {
+                        Text("Save Route")
+                    }
+                }
+                if (uiState.isRouting) {
+                    Text("Routing…", modifier = Modifier.padding(top = 4.dp))
+                }
+                uiState.routingError?.let {
+                    Text("Routing failed: $it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+                }
+
                 uiState.errorMessage?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
                 }
@@ -89,7 +134,7 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
                         modifier = Modifier.padding(top = 12.dp),
                         style = MaterialTheme.typography.labelLarge,
                     )
-                    LazyColumn(modifier = Modifier.heightIn(max = 140.dp)) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 120.dp)) {
                         items(uiState.splitTargetsText.keys.sorted()) { km ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
