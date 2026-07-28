@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Plain platform theme (no Material Components library dependency) — Compose supplies
-         Material 3 theming at the content level via MaterialTheme. -->
-    <style name="Theme.Uprunner" parent="android:Theme.DeviceDefault.DayNight.NoActionBar" />
+         Material 3 theming at the content level via MaterialTheme. "DayNight" is an
+         AppCompat/AndroidX naming convention, not a platform one, so it doesn't exist as
+         android:Theme.DeviceDefault.DayNight.* — the platform's DeviceDefault theme already
+         adapts to the system's light/dark setting via night resource qualifiers on its own. -->
+    <style name="Theme.Uprunner" parent="android:Theme.DeviceDefault.NoActionBar" />
 </resources>
