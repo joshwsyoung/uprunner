@@ -131,6 +131,7 @@ private fun PermissionGate(onGrantClick: () -> Unit) {
 
 private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.ACCESS_FINE_LOCATION)
+    add(Manifest.permission.RECORD_AUDIO) // voice trigger pipeline (spec §4)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)
     }

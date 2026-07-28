@@ -69,6 +69,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.maplibre.android.sdk)
+    implementation(libs.androidx.media)
 
     implementation(libs.kotlin.coroutines.android)
 

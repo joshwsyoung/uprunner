@@ -11,6 +11,7 @@ lifecycleViewmodelCompose = "2.8.4"
 coreKtx = "1.13.1"
 junit = "4.13.2"
 maplibre = "11.8.0"
+androidxMedia = "1.7.0"
 
 [libraries]
 kotlin-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -37,6 +38,7 @@ androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref =
 junit = { module = "junit:junit", version.ref = "junit" }
 
 maplibre-android-sdk = { module = "org.maplibre.gl:android-sdk", version.ref = "maplibre" }
+androidx-media = { module = "androidx.media:media", version.ref = "androidxMedia" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

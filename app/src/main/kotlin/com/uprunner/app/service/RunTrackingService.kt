@@ -38,6 +38,7 @@ class RunTrackingService : Service() {
 
     private lateinit var locationManager: LocationManager
     private lateinit var database: AppDatabase
+    private lateinit var voiceInteractionController: VoiceInteractionController
     private var paceCalculator: PaceCalculator? = null
     private var currentRunId: String? = null
 
@@ -47,6 +48,7 @@ class RunTrackingService : Service() {
         super.onCreate()
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         database = AppDatabase.getInstance(applicationContext)
+        voiceInteractionController = VoiceInteractionController(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,6 +64,7 @@ class RunTrackingService : Service() {
 
     override fun onDestroy() {
         locationManager.removeUpdates(locationListener)
+        voiceInteractionController.stop()
         serviceJob.cancel()
         super.onDestroy()
     }
@@ -75,6 +78,7 @@ class RunTrackingService : Service() {
 
         startForeground(NOTIFICATION_ID, buildNotification())
         RunTrackingRepository.publishStatus(RunStatus.ACTIVE)
+        voiceInteractionController.start()
 
         serviceScope.launch {
             database.runDao().insert(
@@ -121,6 +125,7 @@ class RunTrackingService : Service() {
         }
         currentRunId = null
         paceCalculator = null
+        voiceInteractionController.stop()
         RunTrackingRepository.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

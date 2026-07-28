@@ -9,6 +9,8 @@
     <!-- Map tiles (Plan tab) and offline region download -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice trigger pipeline: on-device speech recognition -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".UprunnerApplication"
