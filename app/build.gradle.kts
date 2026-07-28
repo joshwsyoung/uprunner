@@ -68,6 +68,8 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
+    implementation(libs.maplibre.android.sdk)
+
     implementation(libs.kotlin.coroutines.android)
 
     testImplementation(libs.junit)

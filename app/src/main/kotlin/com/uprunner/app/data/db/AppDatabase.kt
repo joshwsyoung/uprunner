@@ -5,11 +5,17 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-// Split (M2) and ChatMessage (M5) tables arrive later via Room migrations — not scaffolded yet.
-@Database(entities = [RunEntity::class, LocationSampleEntity::class], version = 1, exportSchema = false)
+// ChatMessage (M5) arrives later via another schema bump — not scaffolded yet.
+@Database(
+    entities = [RunEntity::class, LocationSampleEntity::class, RouteEntity::class, SplitEntity::class],
+    version = 2,
+    exportSchema = false,
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun runDao(): RunDao
     abstract fun locationSampleDao(): LocationSampleDao
+    abstract fun routeDao(): RouteDao
+    abstract fun splitDao(): SplitDao
 
     companion object {
         @Volatile
@@ -20,7 +26,13 @@ abstract class AppDatabase : RoomDatabase() {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "uprunner.db",
-            ).build().also { instance = it }
+            )
+                // Pre-release: no real user run-history to preserve yet, and a hand-written
+                // raw-SQL migration can't be verified in this dev container (no Android SDK
+                // to actually run it against). Replace with a real Migration once the app
+                // ships to users with data worth keeping across schema changes.
+                .fallbackToDestructiveMigration()
+                .build().also { instance = it }
         }
     }
 }
