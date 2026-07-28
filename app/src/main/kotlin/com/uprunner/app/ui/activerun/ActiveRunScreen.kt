@@ -1,0 +1,165 @@
+package com.uprunner.app.ui.activerun
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.uprunner.core.model.RunStatus
+import java.util.Locale
+import kotlin.math.roundToInt
+
+/** Tab 1, Mode A (Free Run) per spec §3 — pace/distance/time only, no map, no clutter. */
+@Composable
+fun ActiveRunScreen(viewModel: ActiveRunViewModel = viewModel()) {
+    val context = LocalContext.current
+    var permissionsGranted by remember { mutableStateOf(hasRequiredPermissions(context)) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        permissionsGranted = result.values.all { it }
+    }
+
+    if (!permissionsGranted) {
+        PermissionGate(onGrantClick = { permissionLauncher.launch(requiredPermissions()) })
+        return
+    }
+
+    val telemetry by viewModel.telemetry.collectAsState()
+    val runStatus by viewModel.runStatus.collectAsState()
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        MetricRow(label = "Pace", value = formatPace(telemetry.currentPaceSecPerKm))
+        MetricRow(label = "Distance", value = formatDistance(telemetry.totalDistanceMeters))
+        MetricRow(label = "Time", value = formatElapsed(telemetry.elapsedTimeMillis))
+
+        RunControls(
+            status = runStatus,
+            onStart = viewModel::startRun,
+            onPause = viewModel::pauseRun,
+            onStop = viewModel::stopRun,
+        )
+    }
+}
+
+@Composable
+private fun MetricRow(label: String, value: String) {
+    Column(
+        modifier = Modifier.padding(vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(text = label, fontSize = 20.sp)
+        Text(text = value, fontSize = 64.sp)
+    }
+}
+
+@Composable
+private fun RunControls(status: RunStatus, onStart: () -> Unit, onPause: () -> Unit, onStop: () -> Unit) {
+    Column(
+        modifier = Modifier.padding(top = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        when (status) {
+            RunStatus.COMPLETED -> Button(
+                onClick = onStart,
+                modifier = Modifier.width(220.dp).height(80.dp),
+            ) { Text("Start", fontSize = 28.sp) }
+
+            RunStatus.ACTIVE -> Button(
+                onClick = onPause,
+                modifier = Modifier.width(220.dp).height(80.dp),
+            ) { Text("Pause", fontSize = 28.sp) }
+
+            RunStatus.PAUSED -> Button(
+                onClick = onStart,
+                modifier = Modifier.width(220.dp).height(80.dp),
+            ) { Text("Resume", fontSize = 28.sp) }
+        }
+
+        if (status != RunStatus.COMPLETED) {
+            Button(
+                onClick = onStop,
+                modifier = Modifier.padding(top = 16.dp).width(220.dp).height(80.dp),
+            ) { Text("Stop", fontSize = 28.sp) }
+        }
+    }
+}
+
+@Composable
+private fun PermissionGate(onGrantClick: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = "Location access is required to track your run.",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Button(onClick = onGrantClick, modifier = Modifier.padding(top = 16.dp)) {
+            Text("Grant permissions")
+        }
+    }
+}
+
+private fun requiredPermissions(): Array<String> = buildList {
+    add(Manifest.permission.ACCESS_FINE_LOCATION)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        add(Manifest.permission.POST_NOTIFICATIONS)
+    }
+}.toTypedArray()
+
+private fun hasRequiredPermissions(context: android.content.Context): Boolean =
+    requiredPermissions().all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+private fun formatPace(paceSecPerKm: Double?): String {
+    if (paceSecPerKm == null) return "--:--"
+    val totalSeconds = paceSecPerKm.roundToInt()
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format(Locale.US, "%d:%02d /km", minutes, seconds)
+}
+
+private fun formatDistance(distanceMeters: Double): String =
+    String.format(Locale.US, "%.2f km", distanceMeters / 1000.0)
+
+private fun formatElapsed(elapsedMillis: Long): String {
+    val totalSeconds = elapsedMillis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+}

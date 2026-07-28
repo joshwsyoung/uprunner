@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plain platform theme (no Material Components library dependency) — Compose supplies
+         Material 3 theming at the content level via MaterialTheme. -->
+    <style name="Theme.Uprunner" parent="android:Theme.DeviceDefault.DayNight.NoActionBar" />
+</resources>

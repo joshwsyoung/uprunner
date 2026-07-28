@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Uprunner</string>
+    <string name="nav_active_run">Run</string>
+    <string name="nav_plan">Plan</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_stats">Stats</string>
+</resources>

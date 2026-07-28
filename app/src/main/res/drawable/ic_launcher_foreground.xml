@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple runner-shoe-like glyph placeholder; replace with real branding later. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,74 L46,74 L46,58 L66,58 L78,70 L78,78 L30,78 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,54 L54,54 L58,44 L50,34 L42,38 Z" />
+</vector>
