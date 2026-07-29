@@ -1,7 +1,6 @@
 package com.uprunner.app.ui.plan
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.uprunner.app.data.db.AppDatabase
@@ -61,6 +60,16 @@ data class PlanUiState(
             val points = if (followWays) plannedRoutePoints else waypoints
             return if (points.size < 2) null else RouteStats.summarize(points)
         }
+
+    /** Distance/time for a loaded (not currently-being-planned) route, shown in the route
+     *  detail card once a saved route or a run's route is loaded onto the map. */
+    val loadedRouteStats: RouteStats.Summary?
+        get() = track?.points?.takeIf { it.size >= 2 }?.let { points ->
+            RouteStats.summarize(points.map { it.latitude to it.longitude })
+        }
+
+    val loadedRouteElevationGainMeters: Double?
+        get() = track?.points?.let { points -> RouteStats.elevationGainMeters(points.map { it.elevationMeters }) }
 }
 
 class PlanViewModel(application: Application) : AndroidViewModel(application) {
@@ -223,31 +232,6 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 points = points.map { (lat, lon) -> GpxPoint(lat, lon, elevationMeters = null, timeMillis = null) },
             )
             persistAndDisplayRoute(track)
-        }
-    }
-
-    fun loadGpxFromUri(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val gpxText = try {
-                getApplication<Application>().contentResolver.openInputStream(uri)
-                    ?.bufferedReader()
-                    ?.use { it.readText() }
-            } catch (e: Exception) {
-                null
-            }
-            if (gpxText == null) {
-                _uiState.update { it.copy(errorMessage = "Couldn't read the selected file") }
-                return@launch
-            }
-
-            val track = try {
-                GpxParser.parse(gpxText)
-            } catch (e: Exception) {
-                _uiState.update { it.copy(errorMessage = "Couldn't parse GPX: ${e.message}") }
-                return@launch
-            }
-
-            persistAndDisplayRoute(track, existingGpxText = gpxText)
         }
     }
 

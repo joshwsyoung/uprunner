@@ -70,7 +70,17 @@ fun UprunnerNavHost() {
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(UprunnerTab.ActiveRun.route) { ActiveRunScreen() }
-            composable(UprunnerTab.Plan.route) { PlanScreen() }
+            composable(UprunnerTab.Plan.route) {
+                PlanScreen(
+                    onRunRoute = {
+                        navController.navigate(UprunnerTab.ActiveRun.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
+            }
             composable(UprunnerTab.Chat.route) { ChatScreen() }
             composable(UprunnerTab.Stats.route) { StatsScreen() }
         }

@@ -28,4 +28,21 @@ class RouteStatsTest {
         val expectedMillis = (summary.distanceMeters / 1000.0 * 360.0 * 1000.0).toLong()
         assertEquals(expectedMillis, summary.estimatedTimeMillis)
     }
+
+    @Test
+    fun `elevation gain sums only positive climbs`() {
+        assertEquals(30.0, RouteStats.elevationGainMeters(listOf(100.0, 110.0, 105.0, 125.0))!!, 0.001)
+    }
+
+    @Test
+    fun `elevation gain skips pairs with an unknown side`() {
+        assertEquals(15.0, RouteStats.elevationGainMeters(listOf(100.0, null, 115.0, 110.0))!!, 0.001)
+    }
+
+    @Test
+    fun `elevation gain is null with fewer than two known elevations`() {
+        assertEquals(null, RouteStats.elevationGainMeters(emptyList()))
+        assertEquals(null, RouteStats.elevationGainMeters(listOf(100.0)))
+        assertEquals(null, RouteStats.elevationGainMeters(listOf(null, null)))
+    }
 }

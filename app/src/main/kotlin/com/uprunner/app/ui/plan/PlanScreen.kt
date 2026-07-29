@@ -1,7 +1,5 @@
 package com.uprunner.app.ui.plan
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -22,21 +20,25 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
@@ -55,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -70,10 +73,12 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
+private val SEARCH_BAR_TEXT_COLOR = Color(0xFF1B1B1B)
+
 private val ROUTE_DATE_FORMAT = DateTimeFormatter.ofPattern("MMM d, yyyy").withZone(ZoneId.systemDefault())
 
 @Composable
-fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
+fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = {}) {
     val uiState by viewModel.uiState.collectAsState()
     val savedRoutes by viewModel.savedRoutes.collectAsState()
     val coroutineScope = rememberCoroutineScope()
@@ -91,10 +96,6 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
     uiState.pendingWaypoint?.let { lastPendingWaypoint = it }
     var lastPendingWaypointCount by remember { mutableStateOf(0) }
     if (uiState.pendingWaypoint != null) lastPendingWaypointCount = uiState.waypoints.size
-
-    val gpxPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent(),
-    ) { uri -> uri?.let(viewModel::loadGpxFromUri) }
 
     LaunchedEffect(uiState.routingError) {
         uiState.routingError?.let { snackbarHostState.showSnackbar(it) }
@@ -132,8 +133,17 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Search a place or area") },
+                    shape = RoundedCornerShape(28.dp),
+                    placeholder = { Text("Search a place or area", color = SEARCH_BAR_TEXT_COLOR.copy(alpha = 0.6f)) },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = SEARCH_BAR_TEXT_COLOR),
                     singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = SEARCH_BAR_TEXT_COLOR,
+                    ),
                     trailingIcon = {
                         IconButton(onClick = {
                             searchError = null
@@ -152,10 +162,29 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
                                     .onFailure { searchError = "Couldn't find that place — try a different search." }
                             }
                         }) {
-                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                            Icon(Icons.Filled.Search, contentDescription = "Search", tint = SEARCH_BAR_TEXT_COLOR)
                         }
                     },
                 )
+
+                if (uiState.mode == PlanMode.VIEW) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        onClick = viewModel::enterPlanMode,
+                        shape = RoundedCornerShape(28.dp),
+                        color = Color.White,
+                        shadowElevation = 3.dp,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.Map, contentDescription = null, tint = SEARCH_BAR_TEXT_COLOR, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Plan Route", color = SEARCH_BAR_TEXT_COLOR, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
             }
 
             Column(
@@ -182,24 +211,32 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
                 Crossfade(targetState = uiState.mode, label = "plan-mode-panel") { mode ->
                     Column(modifier = Modifier.padding(16.dp)) {
                         if (mode == PlanMode.VIEW) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Button(onClick = viewModel::enterPlanMode) { Text("Plan New Route") }
-                                Button(onClick = { showRoutesDialog = true }) { Text("Routes") }
+                            if (uiState.track != null) {
+                                uiState.loadedRouteStats?.let { stats ->
+                                    LoadedRouteStatsRow(stats, uiState.loadedRouteElevationGainMeters)
+                                }
+                                Button(onClick = onRunRoute, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                    Icon(Icons.Filled.DirectionsRun, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Run Route")
+                                }
                             }
-                            Button(
-                                onClick = {
-                                    map?.let { m ->
-                                        viewModel.downloadOfflineRegion(
-                                            bounds = m.projection.visibleRegion.latLngBounds,
-                                            minZoom = (m.cameraPosition.zoom - 1).coerceAtLeast(0.0),
-                                            maxZoom = (m.cameraPosition.zoom + 3).coerceAtMost(20.0),
-                                        )
-                                    }
-                                },
-                                enabled = map != null,
-                                modifier = Modifier.padding(top = 8.dp),
-                            ) {
-                                Text("Download Offline Region")
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Button(onClick = { showRoutesDialog = true }) { Text("Routes") }
+                                Button(
+                                    onClick = {
+                                        map?.let { m ->
+                                            viewModel.downloadOfflineRegion(
+                                                bounds = m.projection.visibleRegion.latLngBounds,
+                                                minZoom = (m.cameraPosition.zoom - 1).coerceAtLeast(0.0),
+                                                maxZoom = (m.cameraPosition.zoom + 3).coerceAtMost(20.0),
+                                            )
+                                        }
+                                    },
+                                    enabled = map != null,
+                                ) {
+                                    Text("Download Offline Region")
+                                }
                             }
                         } else {
                             uiState.routeStats?.let { RouteStatsRow(it) }
@@ -262,10 +299,6 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel()) {
     if (showRoutesDialog) {
         RoutesDialog(
             savedRoutes = savedRoutes,
-            onLoadGpxFile = {
-                showRoutesDialog = false
-                gpxPickerLauncher.launch("*/*")
-            },
             onLoadSavedRoute = { route ->
                 showRoutesDialog = false
                 viewModel.loadSavedRoute(route)
@@ -379,6 +412,20 @@ private fun RouteStatsRow(summary: RouteStats.Summary) {
 }
 
 @Composable
+private fun LoadedRouteStatsRow(summary: RouteStats.Summary, elevationGainMeters: Double?) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        StatItem(icon = Icons.Filled.Straighten, label = formatDistance(summary.distanceMeters))
+        StatItem(icon = Icons.Filled.Timer, label = formatDuration(summary.estimatedTimeMillis))
+        elevationGainMeters?.let {
+            StatItem(icon = Icons.Filled.Terrain, label = "+${it.roundToInt()} m")
+        }
+    }
+}
+
+@Composable
 private fun StatItem(icon: ImageVector, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -404,7 +451,6 @@ private fun formatDuration(millis: Long): String {
 @Composable
 private fun RoutesDialog(
     savedRoutes: List<RouteEntity>,
-    onLoadGpxFile: () -> Unit,
     onLoadSavedRoute: (RouteEntity) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -413,10 +459,6 @@ private fun RoutesDialog(
         title = { Text("Routes") },
         text = {
             Column {
-                Button(onClick = onLoadGpxFile, modifier = Modifier.fillMaxWidth()) {
-                    Text("Load GPX from file")
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 if (savedRoutes.isEmpty()) {
                     Text("No saved routes yet — plan or load one to see it here.")
                 } else {

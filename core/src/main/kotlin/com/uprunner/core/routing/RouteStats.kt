@@ -19,6 +19,22 @@ object RouteStats {
         return Summary(distanceMeters, estimatedTimeMillis)
     }
 
+    /** Sum of positive elevation deltas between consecutive *known* points — unknown entries are
+     *  dropped first rather than skipped pairwise, so a single missing sample doesn't erase the
+     *  climb across it. GPX files without a barometer/DEM source, and every route this app plans
+     *  itself (Valhalla's shape has no elevation), leave every entry null, so callers should
+     *  treat a null result as "unknown" rather than "no climb". */
+    fun elevationGainMeters(elevations: List<Double?>): Double? {
+        val known = elevations.filterNotNull()
+        if (known.size < 2) return null
+        var gain = 0.0
+        for (i in 1 until known.size) {
+            val diff = known[i] - known[i - 1]
+            if (diff > 0) gain += diff
+        }
+        return gain
+    }
+
     private fun totalDistanceMeters(points: List<Pair<Double, Double>>): Double {
         var total = 0.0
         for (i in 1 until points.size) {
