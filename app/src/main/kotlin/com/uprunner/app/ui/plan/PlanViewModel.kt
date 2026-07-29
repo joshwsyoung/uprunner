@@ -114,9 +114,9 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Long-press stages a point for confirmation (Komoot's "New Waypoint" sheet) rather than
-     *  committing it immediately — a tap (or a long-press outside [PlanMode.PLAN]) does nothing. */
-    fun handleMapLongPress(point: Pair<Double, Double>) {
+    /** A tap stages a point for confirmation (Komoot's "New Waypoint" sheet) rather than
+     *  committing it immediately — a tap outside [PlanMode.PLAN] does nothing. */
+    fun handleMapTap(point: Pair<Double, Double>) {
         if (_uiState.value.mode != PlanMode.PLAN) return
 
         val waypoints = _uiState.value.waypoints

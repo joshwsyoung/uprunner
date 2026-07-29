@@ -69,7 +69,7 @@ class PaceCalculator {
                 null
             }
         }
-        return PaceSnapshot(paceSecPerKm, totalDistanceMeters, elapsedMillis)
+        return PaceSnapshot(paceSecPerKm, totalDistanceMeters, elapsedMillis, lastSample?.latitude, lastSample?.longitude)
     }
 
     companion object {

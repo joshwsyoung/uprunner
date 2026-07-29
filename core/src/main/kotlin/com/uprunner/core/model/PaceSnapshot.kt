@@ -9,4 +9,6 @@ data class PaceSnapshot(
     val currentPaceSecPerKm: Double?,
     val totalDistanceMeters: Double,
     val elapsedTimeMillis: Long,
+    val latestLatitude: Double? = null,
+    val latestLongitude: Double? = null,
 )

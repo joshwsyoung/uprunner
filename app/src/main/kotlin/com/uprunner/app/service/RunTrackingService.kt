@@ -127,6 +127,7 @@ class RunTrackingService : Service() {
         paceCalculator = null
         voiceInteractionController.stop()
         RunTrackingRepository.reset()
+        SelectedRouteRepository.clear()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

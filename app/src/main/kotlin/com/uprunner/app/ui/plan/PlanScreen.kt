@@ -24,7 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Terrain
@@ -34,6 +38,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,9 +65,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.uprunner.app.data.db.RouteEntity
+import com.uprunner.app.service.SelectedRouteRepository
 import com.uprunner.core.routing.RouteStats
 import kotlinx.coroutines.launch
 import org.maplibre.android.camera.CameraPosition
@@ -83,9 +91,12 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
     val savedRoutes by viewModel.savedRoutes.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var showRoutesDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var mapStyleUrl by remember { mutableStateOf(OPENFREEMAP_LIBERTY_STYLE_URL) }
     var searchQuery by remember { mutableStateOf("") }
     var searchError by remember { mutableStateOf<String?>(null) }
 
@@ -120,9 +131,10 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                 waypoints = uiState.waypoints,
                 plannedRoutePoints = uiState.plannedRoutePoints,
                 pendingPoint = uiState.pendingWaypoint?.point,
+                styleUrl = mapStyleUrl,
                 modifier = Modifier.fillMaxSize(),
                 onMapReady = { map = it },
-                onMapLongPress = viewModel::handleMapLongPress,
+                onMapTap = viewModel::handleMapTap,
             )
 
             Row(
@@ -184,6 +196,39 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                             Text("Plan Route", color = SEARCH_BAR_TEXT_COLOR, style = MaterialTheme.typography.labelLarge)
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box {
+                        Surface(
+                            onClick = { showMoreMenu = true },
+                            shape = RoundedCornerShape(28.dp),
+                            color = Color.White,
+                            shadowElevation = 3.dp,
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "More options",
+                                tint = SEARCH_BAR_TEXT_COLOR,
+                                modifier = Modifier.padding(14.dp).size(18.dp),
+                            )
+                        }
+                        DropdownMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Download Offline Region") },
+                                enabled = map != null,
+                                onClick = {
+                                    showMoreMenu = false
+                                    map?.let { m ->
+                                        viewModel.downloadOfflineRegion(
+                                            bounds = m.projection.visibleRegion.latLngBounds,
+                                            minZoom = (m.cameraPosition.zoom - 1).coerceAtLeast(0.0),
+                                            maxZoom = (m.cameraPosition.zoom + 3).coerceAtMost(20.0),
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
 
@@ -196,6 +241,35 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                 }
                 SmallFloatingActionButton(onClick = { map?.animateCamera(CameraUpdateFactory.zoomOut()) }) {
                     Text("−", style = MaterialTheme.typography.titleMedium)
+                }
+                SmallFloatingActionButton(
+                    onClick = {
+                        mapStyleUrl = if (mapStyleUrl == OPENFREEMAP_LIBERTY_STYLE_URL) {
+                            OPENFREEMAP_BRIGHT_STYLE_URL
+                        } else {
+                            OPENFREEMAP_LIBERTY_STYLE_URL
+                        }
+                    },
+                ) {
+                    Icon(Icons.Filled.Layers, contentDescription = "Change map style")
+                }
+                SmallFloatingActionButton(
+                    onClick = {
+                        lastKnownLocation(context)?.let { (lat, lon) ->
+                            map?.animateCamera(
+                                CameraUpdateFactory.newCameraPosition(
+                                    CameraPosition.Builder().target(LatLng(lat, lon)).zoom(15.0).build(),
+                                ),
+                            )
+                        } ?: run { searchError = "Location unavailable — grant location access on the Run tab first." }
+                    },
+                ) {
+                    Icon(Icons.Filled.MyLocation, contentDescription = "Locate me")
+                }
+                if (uiState.mode == PlanMode.VIEW) {
+                    SmallFloatingActionButton(onClick = { showRoutesDialog = true }) {
+                        Icon(Icons.Filled.List, contentDescription = "Routes")
+                    }
                 }
                 AnimatedVisibility(visible = uiState.mode == PlanMode.PLAN && uiState.waypoints.isNotEmpty()) {
                     SmallFloatingActionButton(onClick = viewModel::undoLastWaypoint) {
@@ -215,33 +289,22 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                                 uiState.loadedRouteStats?.let { stats ->
                                     LoadedRouteStatsRow(stats, uiState.loadedRouteElevationGainMeters)
                                 }
-                                Button(onClick = onRunRoute, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                Button(
+                                    onClick = {
+                                        uiState.track?.let { SelectedRouteRepository.select(it) }
+                                        onRunRoute()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
                                     Icon(Icons.Filled.DirectionsRun, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Run Route")
                                 }
                             }
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Button(onClick = { showRoutesDialog = true }) { Text("Routes") }
-                                Button(
-                                    onClick = {
-                                        map?.let { m ->
-                                            viewModel.downloadOfflineRegion(
-                                                bounds = m.projection.visibleRegion.latLngBounds,
-                                                minZoom = (m.cameraPosition.zoom - 1).coerceAtLeast(0.0),
-                                                maxZoom = (m.cameraPosition.zoom + 3).coerceAtMost(20.0),
-                                            )
-                                        }
-                                    },
-                                    enabled = map != null,
-                                ) {
-                                    Text("Download Offline Region")
-                                }
-                            }
                         } else {
                             uiState.routeStats?.let { RouteStatsRow(it) }
                             Text(
-                                "Long-press the map to add a waypoint",
+                                "Tap the map to add a waypoint",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Row(
