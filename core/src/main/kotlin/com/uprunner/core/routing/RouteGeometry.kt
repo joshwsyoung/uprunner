@@ -36,6 +36,49 @@ object RouteGeometry {
         return if (bestDistanceMeters <= snapThresholdMeters) bestIndex else null
     }
 
+    /** How far along [routePoints] (from its start) the closest point to [position] sits, plus
+     *  how far off the route [position] itself is — the basis for "distance remaining" and
+     *  "distance to next turn" while following a planned route. */
+    data class RouteProjection(val distanceAlongRouteMeters: Double, val distanceFromRouteMeters: Double)
+
+    fun projectOntoRoute(routePoints: List<Pair<Double, Double>>, position: Pair<Double, Double>): RouteProjection? {
+        if (routePoints.size < 2) return null
+
+        var bestDistanceAlongMeters = 0.0
+        var bestDistanceFromMeters = Double.MAX_VALUE
+        var cumulativeMeters = 0.0
+
+        for (i in 0 until routePoints.size - 1) {
+            val a = routePoints[i]
+            val b = routePoints[i + 1]
+            val closest = closestPointOnSegment(a, b, position)
+            val distanceFromMeters = GeoUtils.haversineDistanceMeters(position.first, position.second, closest.first, closest.second)
+            val segmentLengthMeters = GeoUtils.haversineDistanceMeters(a.first, a.second, b.first, b.second)
+
+            if (distanceFromMeters < bestDistanceFromMeters) {
+                bestDistanceFromMeters = distanceFromMeters
+                bestDistanceAlongMeters = cumulativeMeters + GeoUtils.haversineDistanceMeters(a.first, a.second, closest.first, closest.second)
+            }
+            cumulativeMeters += segmentLengthMeters
+        }
+
+        return RouteProjection(bestDistanceAlongMeters, bestDistanceFromMeters)
+    }
+
+    /** Cumulative walking distance from the start of [routePoints] up to (and including) the
+     *  point at [upToIndex] — used to translate a maneuver's point index into "how far into
+     *  the route" it is. */
+    fun cumulativeDistanceMeters(routePoints: List<Pair<Double, Double>>, upToIndex: Int): Double {
+        if (routePoints.size < 2) return 0.0
+        var total = 0.0
+        for (i in 1..upToIndex.coerceIn(0, routePoints.size - 1)) {
+            val a = routePoints[i - 1]
+            val b = routePoints[i]
+            total += GeoUtils.haversineDistanceMeters(a.first, a.second, b.first, b.second)
+        }
+        return total
+    }
+
     /** Nearest point to [p] on segment [a]-[b], via a local equirectangular approximation
      *  (accurate enough at the scale of a planned run route) then clamped to the segment. */
     private fun closestPointOnSegment(

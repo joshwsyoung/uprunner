@@ -8,7 +8,7 @@ import androidx.room.RoomDatabase
 // ChatMessage (M5) arrives later via another schema bump — not scaffolded yet.
 @Database(
     entities = [RunEntity::class, LocationSampleEntity::class, RouteEntity::class, SplitEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

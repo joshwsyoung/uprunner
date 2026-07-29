@@ -291,7 +291,7 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                                 }
                                 Button(
                                     onClick = {
-                                        uiState.track?.let { SelectedRouteRepository.select(it) }
+                                        uiState.track?.let { SelectedRouteRepository.select(it, uiState.maneuvers) }
                                         onRunRoute()
                                     },
                                     modifier = Modifier.fillMaxWidth(),

@@ -9,14 +9,20 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -26,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -35,10 +43,14 @@ import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.uprunner.app.service.SelectedRoute
 import com.uprunner.app.ui.plan.UprunnerMap
-import com.uprunner.core.model.GpxTrack
 import com.uprunner.core.model.PaceSnapshot
 import com.uprunner.core.model.RunStatus
+import com.uprunner.core.pace.RelativePace
+import com.uprunner.core.routing.NavigationState
+import com.uprunner.core.routing.Navigator
+import com.uprunner.core.routing.RouteStats
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -89,7 +101,7 @@ fun ActiveRunScreen(viewModel: ActiveRunViewModel = viewModel()) {
         }
     } else {
         RouteRunSplitScreen(
-            track = route,
+            route = route,
             telemetry = telemetry,
             runStatus = runStatus,
             onStart = viewModel::startRun,
@@ -103,7 +115,7 @@ fun ActiveRunScreen(viewModel: ActiveRunViewModel = viewModel()) {
  *  much of the screen goes to navigation versus glanceable numbers. */
 @Composable
 private fun RouteRunSplitScreen(
-    track: GpxTrack,
+    route: SelectedRoute,
     telemetry: PaceSnapshot,
     runStatus: RunStatus,
     onStart: () -> Unit,
@@ -115,6 +127,13 @@ private fun RouteRunSplitScreen(
     val currentLocation = telemetry.latestLatitude?.let { lat ->
         telemetry.latestLongitude?.let { lon -> lat to lon }
     }
+    val navigationState = currentLocation?.let { location ->
+        Navigator.computeState(
+            routePoints = route.track.points.map { it.latitude to it.longitude },
+            maneuvers = route.maneuvers,
+            position = location,
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -123,10 +142,13 @@ private fun RouteRunSplitScreen(
     ) {
         Box(modifier = Modifier.weight(mapFraction).fillMaxWidth()) {
             UprunnerMap(
-                track = track,
+                track = route.track,
                 currentLocation = currentLocation,
                 modifier = Modifier.fillMaxSize(),
             )
+            navigationState?.let { state ->
+                NavigationCard(state, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
+            }
         }
 
         Box(
@@ -182,9 +204,80 @@ private fun CompactRunStats(
             CompactMetric(label = "Distance", value = formatDistance(telemetry.totalDistanceMeters))
             CompactMetric(label = "Time", value = formatElapsed(telemetry.elapsedTimeMillis))
         }
+        RelativePaceLabel(telemetry.currentPaceSecPerKm)
         CompactRunControls(status = runStatus, onStart = onStart, onPause = onPause, onStop = onStop)
     }
 }
+
+/** Compares live pace against [RouteStats.DEFAULT_PACE_SEC_PER_KM] — there's no per-route
+ *  target-pace input in the UI yet (the Plan tab's per-km split editor from M2 has no screen
+ *  wired up to it), so this is a flat default rather than a per-km-aware target for now. */
+@Composable
+private fun RelativePaceLabel(actualPaceSecPerKm: Double?) {
+    if (actualPaceSecPerKm == null) return
+    val diffSecPerKm = RelativePace.diffSecPerKm(actualPaceSecPerKm, RouteStats.DEFAULT_PACE_SEC_PER_KM)
+    val (text, color) = when {
+        diffSecPerKm > 2 -> "${diffSecPerKm}s/km behind target" to MaterialTheme.colorScheme.error
+        diffSecPerKm < -2 -> "${-diffSecPerKm}s/km ahead of target" to AHEAD_OF_PACE_COLOR
+        else -> "On target pace" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(text, fontSize = 14.sp, color = color)
+}
+
+@Composable
+private fun NavigationCard(state: NavigationState, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val cue = state.nextManeuverCue
+            if (cue == "Arrive at destination") {
+                Icon(Icons.Filled.Flag, contentDescription = null, modifier = Modifier.size(28.dp))
+            } else {
+                Icon(
+                    Icons.Filled.Navigation,
+                    contentDescription = null,
+                    modifier = Modifier.size(28.dp).rotate(turnRotationDegrees(cue)),
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                state.distanceToNextManeuverMeters?.let {
+                    Text(formatCardDistance(it), style = MaterialTheme.typography.titleMedium)
+                }
+                Text(cue ?: "${formatCardDistance(state.distanceRemainingMeters)} to go", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+/** Degrees to rotate the generic "up" navigation arrow so it visually points the right way —
+ *  Valhalla's own instructions are already runner-relative (see [com.uprunner.core.routing.TurnCue]),
+ *  so no compass/heading math is involved, just mapping a cue to an angle. */
+private fun turnRotationDegrees(cue: String?): Float = when (cue) {
+    "Turn left" -> -90f
+    "Sharp left" -> -135f
+    "Bear left" -> -45f
+    "Turn right" -> 90f
+    "Sharp right" -> 135f
+    "Bear right" -> 45f
+    "Make a U-turn" -> 180f
+    else -> 0f
+}
+
+private fun formatCardDistance(meters: Double): String = if (meters >= 1000) {
+    String.format(Locale.US, "%.1f km", meters / 1000.0)
+} else {
+    "${meters.roundToInt()} m"
+}
+
+private val AHEAD_OF_PACE_COLOR = Color(0xFF2E7D32)
 
 @Composable
 private fun CompactMetric(label: String, value: String) {

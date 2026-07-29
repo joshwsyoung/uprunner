@@ -46,6 +46,54 @@ class ValhallaRoutingTest {
         assertEquals(emptyList<Pair<Double, Double>>(), ValhallaRouting.decodeFullRoute(emptyList()))
     }
 
+    @Test
+    fun `extracts a single leg's maneuvers, unaffected by a nested street_names array`() {
+        val response = """
+            {"trip":{"legs":[{"maneuvers":[
+                {"type":1,"instruction":"Walk east on Main Street.","street_names":["Main Street"],"begin_shape_index":0},
+                {"type":9,"instruction":"Turn right onto Oak Avenue.","begin_shape_index":1}
+            ],"shape":"_c`|@_gayB_gayB_gayB"}]}}
+        """.trimIndent()
+
+        val routed = ValhallaRouting.decodeFullRouteWithManeuvers(response)
+
+        assertEquals(2, routed.points.size)
+        assertEquals(
+            listOf(
+                ValhallaRouting.Maneuver("Walk east on Main Street.", 0),
+                ValhallaRouting.Maneuver("Turn right onto Oak Avenue.", 1),
+            ),
+            routed.maneuvers,
+        )
+    }
+
+    @Test
+    fun `translates begin_shape_index across legs into global stitched-point indices`() {
+        val response = """
+            {"trip":{"legs":[
+                {"maneuvers":[
+                    {"type":1,"instruction":"Walk east on Main Street.","begin_shape_index":0},
+                    {"type":9,"instruction":"Turn right onto Oak Avenue.","begin_shape_index":1}
+                ],"shape":"_c`|@_gayB_gayB_gayB"},
+                {"maneuvers":[
+                    {"type":4,"instruction":"You have arrived at your destination.","begin_shape_index":1}
+                ],"shape":"_kbvD_ocsF_gayB_gayB"}
+            ]}}
+        """.trimIndent()
+
+        val routed = ValhallaRouting.decodeFullRouteWithManeuvers(response)
+
+        assertEquals(3, routed.points.size)
+        assertEquals(
+            listOf(
+                ValhallaRouting.Maneuver("Walk east on Main Street.", 0),
+                ValhallaRouting.Maneuver("Turn right onto Oak Avenue.", 1),
+                ValhallaRouting.Maneuver("You have arrived at your destination.", 2),
+            ),
+            routed.maneuvers,
+        )
+    }
+
     private fun assertPointEquals(expected: Pair<Double, Double>, actual: Pair<Double, Double>) {
         assertEquals(expected.first, actual.first, 0.00001)
         assertEquals(expected.second, actual.second, 0.00001)

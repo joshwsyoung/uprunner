@@ -11,8 +11,10 @@ import com.uprunner.core.gpx.GpxWriter
 import com.uprunner.core.model.GpxPoint
 import com.uprunner.core.model.GpxTrack
 import com.uprunner.core.pace.GeoUtils
+import com.uprunner.core.routing.ManeuverCodec
 import com.uprunner.core.routing.RouteGeometry
 import com.uprunner.core.routing.RouteStats
+import com.uprunner.core.routing.ValhallaRouting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +51,7 @@ data class PlanUiState(
     val offlineDownloadStatus: String? = null,
     val waypoints: List<Pair<Double, Double>> = emptyList(),
     val plannedRoutePoints: List<Pair<Double, Double>> = emptyList(),
+    val maneuvers: List<ValhallaRouting.Maneuver> = emptyList(),
     val followWays: Boolean = true,
     val pendingWaypoint: PendingWaypoint? = null,
     val insertAsMiddle: Boolean = false,
@@ -93,6 +96,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 routeId = null,
                 waypoints = emptyList(),
                 plannedRoutePoints = emptyList(),
+                maneuvers = emptyList(),
                 pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
@@ -107,6 +111,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 mode = PlanMode.VIEW,
                 waypoints = emptyList(),
                 plannedRoutePoints = emptyList(),
+                maneuvers = emptyList(),
                 pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
@@ -177,7 +182,14 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     fun clearWaypoints() {
         routingJob?.cancel()
         _uiState.update {
-            it.copy(waypoints = emptyList(), plannedRoutePoints = emptyList(), pendingWaypoint = null, routingError = null, isRouting = false)
+            it.copy(
+                waypoints = emptyList(),
+                plannedRoutePoints = emptyList(),
+                maneuvers = emptyList(),
+                pendingWaypoint = null,
+                routingError = null,
+                isRouting = false,
+            )
         }
     }
 
@@ -192,7 +204,9 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun useStraightLineRoute(waypoints: List<Pair<Double, Double>>) {
         routingJob?.cancel()
-        _uiState.update { it.copy(plannedRoutePoints = waypoints, isRouting = false, routingError = null) }
+        _uiState.update {
+            it.copy(plannedRoutePoints = waypoints, maneuvers = emptyList(), isRouting = false, routingError = null)
+        }
     }
 
     private fun requestRoute(waypoints: List<Pair<Double, Double>>) {
@@ -200,8 +214,15 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         routingJob = viewModelScope.launch {
             _uiState.update { it.copy(isRouting = true) }
             val result = RoutingClient.routePedestrian(waypoints)
-            result.onSuccess { points ->
-                _uiState.update { it.copy(plannedRoutePoints = points, isRouting = false, routingError = null) }
+            result.onSuccess { routed ->
+                _uiState.update {
+                    it.copy(
+                        plannedRoutePoints = routed.points,
+                        maneuvers = routed.maneuvers,
+                        isRouting = false,
+                        routingError = null,
+                    )
+                }
             }.onFailure { error ->
                 _uiState.update { it.copy(isRouting = false, routingError = friendlyRoutingErrorMessage(error)) }
             }
@@ -220,18 +241,20 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Persists the currently planned route through the same Route/Split tables a loaded GPX
-     *  file uses, via [GpxWriter] so it round-trips identically. */
+     *  file uses, via [GpxWriter] so it round-trips identically. Maneuvers only carry over when
+     *  the route actually followed roads/trails — a straight-line plan has none to save. */
     fun savePlannedRoute() {
         val state = _uiState.value
         val points = if (state.followWays) state.plannedRoutePoints else state.waypoints
         if (points.size < 2) return
+        val maneuvers = if (state.followWays) state.maneuvers else emptyList()
 
         viewModelScope.launch(Dispatchers.IO) {
             val track = GpxTrack(
                 name = "Planned route",
                 points = points.map { (lat, lon) -> GpxPoint(lat, lon, elevationMeters = null, timeMillis = null) },
             )
-            persistAndDisplayRoute(track)
+            persistAndDisplayRoute(track, maneuvers = maneuvers)
         }
     }
 
@@ -245,6 +268,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             val totalDistanceKm = ceil(totalDistanceMeters(track) / 1000.0).toInt().coerceAtLeast(1)
+            val maneuvers = route.maneuversJson?.let { ManeuverCodec.decode(it) } ?: emptyList()
             _uiState.update {
                 it.copy(
                     mode = PlanMode.VIEW,
@@ -254,17 +278,28 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                     splitTargetsText = (1..totalDistanceKm).associateWith { "" },
                     waypoints = emptyList(),
                     plannedRoutePoints = emptyList(),
+                    maneuvers = maneuvers,
                     errorMessage = null,
                 )
             }
         }
     }
 
-    private suspend fun persistAndDisplayRoute(track: GpxTrack, existingGpxText: String? = null) {
+    private suspend fun persistAndDisplayRoute(
+        track: GpxTrack,
+        existingGpxText: String? = null,
+        maneuvers: List<ValhallaRouting.Maneuver> = emptyList(),
+    ) {
         val gpxText = existingGpxText ?: GpxWriter.write(track)
         val routeId = UUID.randomUUID().toString()
         database.routeDao().insert(
-            RouteEntity(id = routeId, name = track.name, gpxRaw = gpxText, createdAtMillis = System.currentTimeMillis()),
+            RouteEntity(
+                id = routeId,
+                name = track.name,
+                gpxRaw = gpxText,
+                createdAtMillis = System.currentTimeMillis(),
+                maneuversJson = ManeuverCodec.encode(maneuvers),
+            ),
         )
 
         val totalDistanceKm = ceil(totalDistanceMeters(track) / 1000.0).toInt().coerceAtLeast(1)
@@ -277,6 +312,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 splitTargetsText = (1..totalDistanceKm).associateWith { "" },
                 waypoints = emptyList(),
                 plannedRoutePoints = emptyList(),
+                maneuvers = maneuvers,
                 errorMessage = null,
             )
         }

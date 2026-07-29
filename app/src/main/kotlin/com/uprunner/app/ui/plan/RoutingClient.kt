@@ -27,7 +27,7 @@ object RoutingClient {
      *  service being down (5xx) — those need very different user-facing messages. */
     class RoutingHttpException(val statusCode: Int, message: String) : Exception(message)
 
-    suspend fun routePedestrian(waypoints: List<Pair<Double, Double>>): Result<List<Pair<Double, Double>>> =
+    suspend fun routePedestrian(waypoints: List<Pair<Double, Double>>): Result<ValhallaRouting.RoutedPath> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val requestJson = ValhallaRouting.buildRouteRequestJson(waypoints)
@@ -53,9 +53,9 @@ object RoutingClient {
                     throw RoutingHttpException(responseCode, "Routing request failed ($responseCode): $responseBody")
                 }
 
-                val shapes = ValhallaRouting.extractLegShapes(responseBody)
-                if (shapes.isEmpty()) throw RoutingHttpException(responseCode, "No route found: $responseBody")
-                ValhallaRouting.decodeFullRoute(shapes)
+                val routed = ValhallaRouting.decodeFullRouteWithManeuvers(responseBody)
+                if (routed.points.isEmpty()) throw RoutingHttpException(responseCode, "No route found: $responseBody")
+                routed
             }
         }
 }
