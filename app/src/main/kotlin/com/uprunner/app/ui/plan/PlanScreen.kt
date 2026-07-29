@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsRun
@@ -66,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.uprunner.app.data.db.RouteEntity
@@ -95,6 +98,7 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
 
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var showRoutesDialog by remember { mutableStateOf(false) }
+    var showPaceDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var mapStyleUrl by remember { mutableStateOf(OPENFREEMAP_LIBERTY_STYLE_URL) }
     var searchQuery by remember { mutableStateOf("") }
@@ -124,6 +128,24 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
         }
     }
 
+    fun runSearch() {
+        searchError = null
+        coroutineScope.launch {
+            GeocodingClient.searchFirstResult(searchQuery)
+                .onSuccess { result ->
+                    map?.animateCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder()
+                                .target(LatLng(result.latitude, result.longitude))
+                                .zoom(13.0)
+                                .build(),
+                        ),
+                    )
+                }
+                .onFailure { searchError = "Couldn't find that place — try a different search." }
+        }
+    }
+
     Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { _ ->
         Box(modifier = Modifier.fillMaxSize()) {
             UprunnerMap(
@@ -135,6 +157,7 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                 modifier = Modifier.fillMaxSize(),
                 onMapReady = { map = it },
                 onMapTap = viewModel::handleMapTap,
+                onWaypointTap = viewModel::selectWaypoint,
             )
 
             Row(
@@ -156,24 +179,10 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                         unfocusedBorderColor = Color.Transparent,
                         cursorColor = SEARCH_BAR_TEXT_COLOR,
                     ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { runSearch() }),
                     trailingIcon = {
-                        IconButton(onClick = {
-                            searchError = null
-                            coroutineScope.launch {
-                                GeocodingClient.searchFirstResult(searchQuery)
-                                    .onSuccess { result ->
-                                        map?.animateCamera(
-                                            CameraUpdateFactory.newCameraPosition(
-                                                CameraPosition.Builder()
-                                                    .target(LatLng(result.latitude, result.longitude))
-                                                    .zoom(13.0)
-                                                    .build(),
-                                            ),
-                                        )
-                                    }
-                                    .onFailure { searchError = "Couldn't find that place — try a different search." }
-                            }
-                        }) {
+                        IconButton(onClick = { runSearch() }) {
                             Icon(Icons.Filled.Search, contentDescription = "Search", tint = SEARCH_BAR_TEXT_COLOR)
                         }
                     },
@@ -290,10 +299,7 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                                     LoadedRouteStatsRow(stats, uiState.loadedRouteElevationGainMeters)
                                 }
                                 Button(
-                                    onClick = {
-                                        uiState.track?.let { SelectedRouteRepository.select(it, uiState.maneuvers) }
-                                        onRunRoute()
-                                    },
+                                    onClick = { showPaceDialog = true },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Icon(Icons.Filled.DirectionsRun, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -303,10 +309,21 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                             }
                         } else {
                             uiState.routeStats?.let { RouteStatsRow(it) }
-                            Text(
-                                "Tap the map to add a waypoint",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                            if (uiState.isMovingWaypoint) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("Tap the map to move the waypoint", style = MaterialTheme.typography.bodySmall)
+                                    TextButton(onClick = viewModel::dismissWaypointSelection) { Text("Cancel") }
+                                }
+                            } else {
+                                Text(
+                                    "Tap the map to add a waypoint",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -359,6 +376,14 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
         }
     }
 
+    if (uiState.selectedWaypointIndex != null && !uiState.isMovingWaypoint) {
+        WaypointActionDialog(
+            onMove = viewModel::startMovingSelectedWaypoint,
+            onRemove = viewModel::removeSelectedWaypoint,
+            onDismiss = viewModel::dismissWaypointSelection,
+        )
+    }
+
     if (showRoutesDialog) {
         RoutesDialog(
             savedRoutes = savedRoutes,
@@ -367,6 +392,17 @@ fun PlanScreen(viewModel: PlanViewModel = viewModel(), onRunRoute: () -> Unit = 
                 viewModel.loadSavedRoute(route)
             },
             onDismiss = { showRoutesDialog = false },
+        )
+    }
+
+    if (showPaceDialog) {
+        PaceInputDialog(
+            onConfirm = { targetPaceSecPerKm ->
+                uiState.track?.let { SelectedRouteRepository.select(it, uiState.maneuvers, targetPaceSecPerKm) }
+                showPaceDialog = false
+                onRunRoute()
+            },
+            onDismiss = { showPaceDialog = false },
         )
     }
 }
@@ -461,6 +497,69 @@ private fun NewWaypointSheet(
             }
         }
     }
+}
+
+/** Shown when "Run Route" is tapped, before handing off to the Run tab — the runner sets the
+ *  pace they want to aim for, which the Navigation Card's Relative Pace Difference compares
+ *  against for the whole run (see [SelectedRoute.targetPaceSecPerKm]). */
+@Composable
+private fun PaceInputDialog(onConfirm: (Double) -> Unit, onDismiss: () -> Unit) {
+    var paceText by remember { mutableStateOf("6:00") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set your target pace") },
+        text = {
+            Column {
+                Text(
+                    "What pace do you want to aim for on this run?",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = paceText,
+                    onValueChange = { paceText = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    placeholder = { Text("mm:ss per km") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(parsePaceMinSecPerKm(paceText) ?: RouteStats.DEFAULT_PACE_SEC_PER_KM) }) {
+                Text("Start Run")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+private fun parsePaceMinSecPerKm(text: String): Double? {
+    val parts = text.trim().split(":")
+    if (parts.size != 2) return null
+    val minutes = parts[0].toDoubleOrNull() ?: return null
+    val seconds = parts[1].toDoubleOrNull() ?: return null
+    if (minutes < 0 || seconds !in 0.0..59.0) return null
+    return minutes * 60 + seconds
+}
+
+@Composable
+private fun WaypointActionDialog(onMove: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Waypoint") },
+        text = { Text("Move this waypoint to a new spot, or remove it from the route.") },
+        confirmButton = {
+            TextButton(onClick = onRemove) { Text("Remove") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                TextButton(onClick = onMove) { Text("Move") }
+            }
+        },
+    )
 }
 
 @Composable

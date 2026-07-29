@@ -51,7 +51,6 @@ import com.uprunner.core.model.RunStatus
 import com.uprunner.core.pace.RelativePace
 import com.uprunner.core.routing.NavigationState
 import com.uprunner.core.routing.Navigator
-import com.uprunner.core.routing.RouteStats
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -179,6 +178,7 @@ private fun RouteRunSplitScreen(
             CompactRunStats(
                 telemetry = telemetry,
                 runStatus = runStatus,
+                targetPaceSecPerKm = route.targetPaceSecPerKm,
                 onStart = onStart,
                 onPause = onPause,
                 onStop = onStop,
@@ -191,6 +191,7 @@ private fun RouteRunSplitScreen(
 private fun CompactRunStats(
     telemetry: PaceSnapshot,
     runStatus: RunStatus,
+    targetPaceSecPerKm: Double,
     onStart: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
@@ -205,18 +206,17 @@ private fun CompactRunStats(
             CompactMetric(label = "Distance", value = formatDistance(telemetry.totalDistanceMeters))
             CompactMetric(label = "Time", value = formatElapsed(telemetry.elapsedTimeMillis))
         }
-        RelativePaceLabel(telemetry.currentPaceSecPerKm)
+        RelativePaceLabel(telemetry.currentPaceSecPerKm, targetPaceSecPerKm)
         CompactRunControls(status = runStatus, onStart = onStart, onPause = onPause, onStop = onStop)
     }
 }
 
-/** Compares live pace against [RouteStats.DEFAULT_PACE_SEC_PER_KM] — there's no per-route
- *  target-pace input in the UI yet (the Plan tab's per-km split editor from M2 has no screen
- *  wired up to it), so this is a flat default rather than a per-km-aware target for now. */
+/** Compares live pace against the route's own [targetPaceSecPerKm] — set by the runner in the
+ *  Plan tab's pace-input step before starting (see PlanScreen's "Run Route" flow). */
 @Composable
-private fun RelativePaceLabel(actualPaceSecPerKm: Double?) {
+private fun RelativePaceLabel(actualPaceSecPerKm: Double?, targetPaceSecPerKm: Double) {
     if (actualPaceSecPerKm == null) return
-    val diffSecPerKm = RelativePace.diffSecPerKm(actualPaceSecPerKm, RouteStats.DEFAULT_PACE_SEC_PER_KM)
+    val diffSecPerKm = RelativePace.diffSecPerKm(actualPaceSecPerKm, targetPaceSecPerKm)
     val (text, color) = when {
         diffSecPerKm > 2 -> "${diffSecPerKm}s/km behind target" to MaterialTheme.colorScheme.error
         diffSecPerKm < -2 -> "${-diffSecPerKm}s/km ahead of target" to AHEAD_OF_PACE_COLOR

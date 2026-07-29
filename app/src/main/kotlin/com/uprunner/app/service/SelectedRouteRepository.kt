@@ -1,14 +1,20 @@
 package com.uprunner.app.service
 
 import com.uprunner.core.model.GpxTrack
+import com.uprunner.core.routing.RouteStats
 import com.uprunner.core.routing.ValhallaRouting
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** [maneuvers] is empty for routes with no turn-by-turn data — either saved before M6, or
  *  planned with "Follow roads & trails" off (a straight-line path has no maneuvers). The
- *  Navigation Card just doesn't show a next-turn cue in that case. */
-data class SelectedRoute(val track: GpxTrack, val maneuvers: List<ValhallaRouting.Maneuver>)
+ *  Navigation Card just doesn't show a next-turn cue in that case. [targetPaceSecPerKm] is
+ *  whatever the runner entered in the Plan tab's pace-input step before starting. */
+data class SelectedRoute(
+    val track: GpxTrack,
+    val maneuvers: List<ValhallaRouting.Maneuver>,
+    val targetPaceSecPerKm: Double = RouteStats.DEFAULT_PACE_SEC_PER_KM,
+)
 
 /**
  * Process-wide bridge between the Plan tab's "Run Route" button and the Active Run screen —
@@ -22,8 +28,12 @@ object SelectedRouteRepository {
     private val _selectedRoute = MutableStateFlow<SelectedRoute?>(null)
     val selectedRoute: StateFlow<SelectedRoute?> = _selectedRoute
 
-    fun select(track: GpxTrack, maneuvers: List<ValhallaRouting.Maneuver> = emptyList()) {
-        _selectedRoute.value = SelectedRoute(track, maneuvers)
+    fun select(
+        track: GpxTrack,
+        maneuvers: List<ValhallaRouting.Maneuver> = emptyList(),
+        targetPaceSecPerKm: Double = RouteStats.DEFAULT_PACE_SEC_PER_KM,
+    ) {
+        _selectedRoute.value = SelectedRoute(track, maneuvers, targetPaceSecPerKm)
     }
 
     fun clear() {

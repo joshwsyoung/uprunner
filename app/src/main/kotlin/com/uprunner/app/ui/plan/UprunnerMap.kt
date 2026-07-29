@@ -3,6 +3,7 @@ package com.uprunner.app.ui.plan
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.RectF
 import android.location.LocationManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,6 +63,7 @@ private const val CURRENT_LOCATION_CIRCLE_LAYER_ID = "uprunner-current-location-
 
 private const val DEFAULT_LOCAL_ZOOM = 14.0
 private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
+private const val WAYPOINT_TAP_TOLERANCE_PX = 24f
 
 /**
  * Full-screen MapLibre map for the Plan tab (spec §3 Tab 2) and the Active Run split-screen
@@ -77,7 +79,8 @@ private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
  * used by the Active Run screen while running a planned route.
  *
  * Placing a point is a quick tap via [onMapTap], staging it rather than committing it
- * immediately.
+ * immediately. A tap that lands on an existing waypoint's pin calls [onWaypointTap] instead,
+ * so it can be removed or moved rather than adding a new one on top of it.
  */
 @Composable
 fun UprunnerMap(
@@ -90,6 +93,7 @@ fun UprunnerMap(
     modifier: Modifier = Modifier,
     onMapReady: (MapLibreMap) -> Unit = {},
     onMapTap: (Pair<Double, Double>) -> Unit = {},
+    onWaypointTap: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -130,7 +134,22 @@ fun UprunnerMap(
         factory = {
             mapView.getMapAsync { map ->
                 map.addOnMapClickListener { latLng ->
-                    onMapTap(latLng.latitude to latLng.longitude)
+                    val screenPoint = map.projection.toScreenLocation(latLng)
+                    val tappedWaypointIndex = map.queryRenderedFeatures(
+                        RectF(
+                            screenPoint.x - WAYPOINT_TAP_TOLERANCE_PX,
+                            screenPoint.y - WAYPOINT_TAP_TOLERANCE_PX,
+                            screenPoint.x + WAYPOINT_TAP_TOLERANCE_PX,
+                            screenPoint.y + WAYPOINT_TAP_TOLERANCE_PX,
+                        ),
+                        WAYPOINTS_CIRCLE_LAYER_ID,
+                    ).firstOrNull()?.getNumberProperty("index")?.toInt()
+
+                    if (tappedWaypointIndex != null) {
+                        onWaypointTap(tappedWaypointIndex)
+                    } else {
+                        onMapTap(latLng.latitude to latLng.longitude)
+                    }
                     true
                 }
                 map.setStyle(Style.Builder().fromUri(styleUrl)) { style ->
@@ -231,7 +250,10 @@ private fun renderWaypoints(style: Style, waypoints: List<Pair<Double, Double>>)
     if (waypoints.isEmpty()) return
 
     val features = waypoints.mapIndexed { index, (lat, lon) ->
-        val properties = JsonObject().apply { addProperty("label", waypointLabel(index, waypoints.size)) }
+        val properties = JsonObject().apply {
+            addProperty("label", waypointLabel(index, waypoints.size))
+            addProperty("index", index)
+        }
         Feature.fromGeometry(Point.fromLngLat(lon, lat), properties)
     }
     style.addSource(GeoJsonSource(WAYPOINTS_SOURCE_ID, FeatureCollection.fromFeatures(features)))

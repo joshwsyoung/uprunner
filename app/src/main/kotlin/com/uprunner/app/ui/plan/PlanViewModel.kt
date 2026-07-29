@@ -57,6 +57,8 @@ data class PlanUiState(
     val insertAsMiddle: Boolean = false,
     val isRouting: Boolean = false,
     val routingError: String? = null,
+    val selectedWaypointIndex: Int? = null,
+    val isMovingWaypoint: Boolean = false,
 ) {
     val routeStats: RouteStats.Summary?
         get() {
@@ -100,6 +102,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
+                selectedWaypointIndex = null,
+                isMovingWaypoint = false,
             )
         }
     }
@@ -115,14 +119,28 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
+                selectedWaypointIndex = null,
+                isMovingWaypoint = false,
             )
         }
     }
 
     /** A tap stages a point for confirmation (Komoot's "New Waypoint" sheet) rather than
-     *  committing it immediately — a tap outside [PlanMode.PLAN] does nothing. */
+     *  committing it immediately — a tap outside [PlanMode.PLAN] does nothing. While
+     *  [PlanUiState.isMovingWaypoint] is armed (see [startMovingSelectedWaypoint]), a tap instead
+     *  relocates the selected waypoint in place. */
     fun handleMapTap(point: Pair<Double, Double>) {
         if (_uiState.value.mode != PlanMode.PLAN) return
+
+        val movingIndex = _uiState.value.selectedWaypointIndex
+        if (_uiState.value.isMovingWaypoint && movingIndex != null) {
+            val updated = _uiState.value.waypoints.toMutableList().apply { set(movingIndex, point) }
+            _uiState.update {
+                it.copy(waypoints = updated, selectedWaypointIndex = null, isMovingWaypoint = false, routingError = null)
+            }
+            updateRouteForWaypoints(updated)
+            return
+        }
 
         val waypoints = _uiState.value.waypoints
         val suggestedIndex = if (waypoints.size >= 2) {
@@ -140,6 +158,30 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 insertAsMiddle = suggestedIndex != null,
             )
         }
+    }
+
+    /** Tapping an existing waypoint's pin (as opposed to empty map) opens the remove/move sheet
+     *  instead of staging a new point. */
+    fun selectWaypoint(index: Int) {
+        if (_uiState.value.mode != PlanMode.PLAN) return
+        _uiState.update { it.copy(selectedWaypointIndex = index, isMovingWaypoint = false) }
+    }
+
+    fun dismissWaypointSelection() {
+        _uiState.update { it.copy(selectedWaypointIndex = null, isMovingWaypoint = false) }
+    }
+
+    /** Arms move mode — the next map tap (see [handleMapTap]) relocates this waypoint instead of
+     *  adding a new one. */
+    fun startMovingSelectedWaypoint() {
+        _uiState.update { it.copy(isMovingWaypoint = true) }
+    }
+
+    fun removeSelectedWaypoint() {
+        val index = _uiState.value.selectedWaypointIndex ?: return
+        val updated = _uiState.value.waypoints.toMutableList().apply { removeAt(index) }
+        _uiState.update { it.copy(waypoints = updated, selectedWaypointIndex = null, isMovingWaypoint = false) }
+        updateRouteForWaypoints(updated)
     }
 
     fun setInsertAsMiddle(value: Boolean) {
@@ -164,13 +206,21 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
             current + pending.point
         }
 
-        _uiState.update { it.copy(waypoints = updated, pendingWaypoint = null, routingError = null) }
+        _uiState.update {
+            it.copy(
+                waypoints = updated,
+                pendingWaypoint = null,
+                routingError = null,
+                selectedWaypointIndex = null,
+                isMovingWaypoint = false,
+            )
+        }
         updateRouteForWaypoints(updated)
     }
 
     fun undoLastWaypoint() {
         val updated = _uiState.value.waypoints.dropLast(1)
-        _uiState.update { it.copy(waypoints = updated) }
+        _uiState.update { it.copy(waypoints = updated, selectedWaypointIndex = null, isMovingWaypoint = false) }
         updateRouteForWaypoints(updated)
     }
 
@@ -189,6 +239,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
+                selectedWaypointIndex = null,
+                isMovingWaypoint = false,
             )
         }
     }
