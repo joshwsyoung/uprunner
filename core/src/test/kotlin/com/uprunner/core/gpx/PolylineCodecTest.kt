@@ -1,6 +1,7 @@
 package com.uprunner.core.gpx
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class PolylineCodecTest {
@@ -30,6 +31,24 @@ class PolylineCodecTest {
     @Test
     fun `empty string decodes to no points`() {
         assertEquals(emptyList<Pair<Double, Double>>(), PolylineCodec.decode(""))
+    }
+
+    @Test
+    fun `truncated input throws a clean IllegalArgumentException instead of crashing`() {
+        // A real-world case that used to surface a raw StringIndexOutOfBoundsException to the
+        // user ("length=141; index=141") instead of a catchable, friendly-messaged error.
+        assertThrows(IllegalArgumentException::class.java) {
+            PolylineCodec.decode("_p~iF~ps|U_ulLnnqC_mqN", precision = 5)
+        }
+    }
+
+    @Test
+    fun `mid-continuation truncation also throws cleanly`() {
+        // Ends on a byte with the continuation bit set (>= 0x20 after the -63 offset), so the
+        // decoder expects another byte that never arrives.
+        assertThrows(IllegalArgumentException::class.java) {
+            PolylineCodec.decode("_p~iF~ps|U_ulLnnqC_mqNvxq", precision = 5)
+        }
     }
 
     private fun assertPointsEqual(expected: List<Pair<Double, Double>>, actual: List<Pair<Double, Double>>) {

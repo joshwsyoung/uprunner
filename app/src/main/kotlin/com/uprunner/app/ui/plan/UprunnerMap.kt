@@ -43,6 +43,8 @@ const val OPENFREEMAP_LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/
 
 private const val LOADED_TRACK_SOURCE_ID = "uprunner-loaded-track-source"
 private const val LOADED_TRACK_LINE_LAYER_ID = "uprunner-loaded-track-line"
+private const val WAYPOINT_PREVIEW_SOURCE_ID = "uprunner-waypoint-preview-source"
+private const val WAYPOINT_PREVIEW_LINE_LAYER_ID = "uprunner-waypoint-preview-line"
 private const val PLANNED_ROUTE_SOURCE_ID = "uprunner-planned-route-source"
 private const val PLANNED_ROUTE_LINE_LAYER_ID = "uprunner-planned-route-line"
 private const val WAYPOINTS_SOURCE_ID = "uprunner-waypoints-source"
@@ -55,9 +57,10 @@ private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
  * Full-screen MapLibre map for the Plan tab (spec §3 Tab 2). Not yet doing 3D terrain/DEM
  * hillshading — that's a deliberately deferred fast-follow, not attempted in this pass.
  *
- * Two independently rendered lines can be visible at once: [track] (a loaded GPX file, blue)
- * and [plannedRoutePoints] (a tap-to-place-waypoints route snapped to roads/trails via
- * Valhalla, orange), plus [waypoints] markers for the route currently being planned.
+ * Several layers can be visible at once while planning: [track] (a loaded/saved GPX, blue), a
+ * dashed straight-line preview connecting [waypoints] in order (so there's instant feedback
+ * before routing resolves), the solid snapped [plannedRoutePoints] (orange, drawn once the
+ * routing call succeeds), and circle markers for each waypoint.
  */
 @Composable
 fun UprunnerMap(
@@ -101,6 +104,7 @@ fun UprunnerMap(
                 }
                 map.setStyle(Style.Builder().fromUri(OPENFREEMAP_LIBERTY_STYLE_URL)) { style ->
                     renderLoadedTrack(style, track)
+                    renderWaypointPreviewLine(style, waypoints)
                     renderPlannedRoute(style, plannedRoutePoints)
                     renderWaypoints(style, waypoints)
                     if (track != null) {
@@ -119,6 +123,7 @@ fun UprunnerMap(
             val style = map?.style
             if (map != null && style != null) {
                 renderLoadedTrack(style, track)
+                renderWaypointPreviewLine(style, waypoints)
                 renderPlannedRoute(style, plannedRoutePoints)
                 renderWaypoints(style, waypoints)
                 track?.let { fitCameraToPoints(map, it.points.map { p -> p.latitude to p.longitude }) }
@@ -132,22 +137,29 @@ private fun renderLoadedTrack(style: Style, track: GpxTrack?) {
 }
 
 private fun renderPlannedRoute(style: Style, points: List<Pair<Double, Double>>) {
-    renderLine(style, PLANNED_ROUTE_SOURCE_ID, PLANNED_ROUTE_LINE_LAYER_ID, "#FF6D00", points)
+    renderLine(style, PLANNED_ROUTE_SOURCE_ID, PLANNED_ROUTE_LINE_LAYER_ID, "#FF6D00", points, dashed = false)
 }
 
-private fun renderLine(style: Style, sourceId: String, layerId: String, colorHex: String, points: List<Pair<Double, Double>>?) {
+/** Immediate straight-line feedback between raw waypoint taps, shown while the snapped route
+ *  is still being fetched (or if it never resolves) — a visible "building" state rather than
+ *  nothing happening between a tap and the routing call finishing. */
+private fun renderWaypointPreviewLine(style: Style, waypoints: List<Pair<Double, Double>>) {
+    renderLine(style, WAYPOINT_PREVIEW_SOURCE_ID, WAYPOINT_PREVIEW_LINE_LAYER_ID, "#FF6D00", waypoints, dashed = true)
+}
+
+private fun renderLine(style: Style, sourceId: String, layerId: String, colorHex: String, points: List<Pair<Double, Double>>?, dashed: Boolean) {
     style.getLayer(layerId)?.let { style.removeLayer(it) }
     style.getSource(sourceId)?.let { style.removeSource(it) }
     if (points == null || points.size < 2) return
 
     val lineString = LineString.fromLngLats(points.map { (lat, lon) -> Point.fromLngLat(lon, lat) })
     style.addSource(GeoJsonSource(sourceId, Feature.fromGeometry(lineString)))
-    style.addLayer(
-        LineLayer(layerId, sourceId).withProperties(
-            PropertyFactory.lineColor(colorHex),
-            PropertyFactory.lineWidth(4f),
-        ),
+    val properties = mutableListOf(
+        PropertyFactory.lineColor(colorHex),
+        PropertyFactory.lineWidth(if (dashed) 2.5f else 4f),
     )
+    if (dashed) properties += PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f))
+    style.addLayer(LineLayer(layerId, sourceId).withProperties(*properties.toTypedArray()))
 }
 
 private fun renderWaypoints(style: Style, waypoints: List<Pair<Double, Double>>) {
