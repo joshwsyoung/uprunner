@@ -133,7 +133,14 @@ fun UprunnerMap(
 }
 
 private fun renderLoadedTrack(style: Style, track: GpxTrack?) {
-    renderLine(style, LOADED_TRACK_SOURCE_ID, LOADED_TRACK_LINE_LAYER_ID, "#2962FF", track?.points?.map { it.latitude to it.longitude })
+    renderLine(
+        style,
+        LOADED_TRACK_SOURCE_ID,
+        LOADED_TRACK_LINE_LAYER_ID,
+        "#2962FF",
+        track?.points?.map { it.latitude to it.longitude },
+        dashed = false,
+    )
 }
 
 private fun renderPlannedRoute(style: Style, points: List<Pair<Double, Double>>) {
@@ -154,12 +161,20 @@ private fun renderLine(style: Style, sourceId: String, layerId: String, colorHex
 
     val lineString = LineString.fromLngLats(points.map { (lat, lon) -> Point.fromLngLat(lon, lat) })
     style.addSource(GeoJsonSource(sourceId, Feature.fromGeometry(lineString)))
-    val properties = mutableListOf(
-        PropertyFactory.lineColor(colorHex),
-        PropertyFactory.lineWidth(if (dashed) 2.5f else 4f),
-    )
-    if (dashed) properties += PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f))
-    style.addLayer(LineLayer(layerId, sourceId).withProperties(*properties.toTypedArray()))
+    val layer = LineLayer(layerId, sourceId)
+    if (dashed) {
+        layer.setProperties(
+            PropertyFactory.lineColor(colorHex),
+            PropertyFactory.lineWidth(2.5f),
+            PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f)),
+        )
+    } else {
+        layer.setProperties(
+            PropertyFactory.lineColor(colorHex),
+            PropertyFactory.lineWidth(4f),
+        )
+    }
+    style.addLayer(layer)
 }
 
 private fun renderWaypoints(style: Style, waypoints: List<Pair<Double, Double>>) {
