@@ -17,6 +17,16 @@ object RoutingClient {
 
     private const val ROUTE_URL = "https://valhalla1.openstreetmap.de/route"
 
+    // Public OSM-adjacent services (Nominatim, and FOSSGIS's Valhalla mirror) reject or rate-limit
+    // requests carrying Java's default User-Agent as abuse mitigation, so this identifies the app
+    // the same way GeocodingClient's Nominatim calls already do.
+    private const val USER_AGENT = "uprunner-app/0.1 (offline running coach app; contact: none)"
+
+    /** Carries the HTTP status so callers can tell "no route exists" (400, Valhalla's own
+     *  no-path error) apart from the request being blocked or rate-limited (403/429) or the
+     *  service being down (5xx) — those need very different user-facing messages. */
+    class RoutingHttpException(val statusCode: Int, message: String) : Exception(message)
+
     suspend fun routePedestrian(waypoints: List<Pair<Double, Double>>): Result<List<Pair<Double, Double>>> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -25,6 +35,7 @@ object RoutingClient {
                     requestMethod = "POST"
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("User-Agent", USER_AGENT)
                     connectTimeout = 15_000
                     readTimeout = 15_000
                 }
@@ -38,10 +49,12 @@ object RoutingClient {
                 val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
                 connection.disconnect()
 
-                check(responseCode in 200..299) { "Routing request failed ($responseCode): $responseBody" }
+                if (responseCode !in 200..299) {
+                    throw RoutingHttpException(responseCode, "Routing request failed ($responseCode): $responseBody")
+                }
 
                 val shapes = ValhallaRouting.extractLegShapes(responseBody)
-                check(shapes.isNotEmpty()) { "No route found" }
+                if (shapes.isEmpty()) throw RoutingHttpException(responseCode, "No route found: $responseBody")
                 ValhallaRouting.decodeFullRoute(shapes)
             }
         }

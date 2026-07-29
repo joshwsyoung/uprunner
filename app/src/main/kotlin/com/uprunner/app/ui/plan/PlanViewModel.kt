@@ -199,8 +199,14 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun friendlyRoutingErrorMessage(error: Throwable): String = when (error) {
-        is IOException -> "Couldn't reach the routing service — check your connection and try again."
+    private fun friendlyRoutingErrorMessage(error: Throwable): String = when {
+        error is IOException -> "Couldn't reach the routing service — check your connection and try again."
+        error is RoutingClient.RoutingHttpException && error.statusCode == 400 ->
+            "Couldn't find a route between those points. Try placing a waypoint closer to a road or trail."
+        error is RoutingClient.RoutingHttpException && error.statusCode == 429 ->
+            "Routing service is busy right now — wait a moment and try again."
+        error is RoutingClient.RoutingHttpException ->
+            "Routing service error (${error.statusCode}). Please try again in a moment."
         else -> "Couldn't find a route between those points. Try placing a waypoint closer to a road or trail."
     }
 
