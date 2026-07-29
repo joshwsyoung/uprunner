@@ -17,6 +17,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.google.gson.JsonObject
 import com.uprunner.core.model.GpxTrack
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -26,9 +27,11 @@ import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -49,6 +52,9 @@ private const val PLANNED_ROUTE_SOURCE_ID = "uprunner-planned-route-source"
 private const val PLANNED_ROUTE_LINE_LAYER_ID = "uprunner-planned-route-line"
 private const val WAYPOINTS_SOURCE_ID = "uprunner-waypoints-source"
 private const val WAYPOINTS_CIRCLE_LAYER_ID = "uprunner-waypoints-circle"
+private const val WAYPOINTS_LABEL_LAYER_ID = "uprunner-waypoints-label"
+private const val PENDING_POINT_SOURCE_ID = "uprunner-pending-point-source"
+private const val PENDING_POINT_CIRCLE_LAYER_ID = "uprunner-pending-point-circle"
 
 private const val DEFAULT_LOCAL_ZOOM = 14.0
 private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
@@ -58,18 +64,24 @@ private const val NO_LOCATION_FALLBACK_ZOOM = 2.0
  * hillshading — that's a deliberately deferred fast-follow, not attempted in this pass.
  *
  * Several layers can be visible at once while planning: [track] (a loaded/saved GPX, blue), a
- * dashed straight-line preview connecting [waypoints] in order (so there's instant feedback
- * before routing resolves), the solid snapped [plannedRoutePoints] (orange, drawn once the
- * routing call succeeds), and circle markers for each waypoint.
+ * dashed straight-line preview connecting [waypoints] in order (instant feedback before
+ * routing resolves), the solid snapped [plannedRoutePoints] (orange, once routing succeeds),
+ * lettered/numbered circle markers per waypoint (A, B, 2, 3… — Komoot's convention), and
+ * [pendingPoint] — a distinct red marker for a long-pressed point still awaiting the user's
+ * choice in the "New Waypoint" sheet.
+ *
+ * Placing a point is a long-press (not a tap), matching Komoot's interaction model — it stages
+ * the point via [onMapLongPress] rather than committing it immediately.
  */
 @Composable
 fun UprunnerMap(
     track: GpxTrack?,
     waypoints: List<Pair<Double, Double>> = emptyList(),
     plannedRoutePoints: List<Pair<Double, Double>> = emptyList(),
+    pendingPoint: Pair<Double, Double>? = null,
     modifier: Modifier = Modifier,
     onMapReady: (MapLibreMap) -> Unit = {},
-    onMapClick: (Pair<Double, Double>) -> Unit = {},
+    onMapLongPress: (Pair<Double, Double>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -98,8 +110,8 @@ fun UprunnerMap(
         modifier = modifier,
         factory = {
             mapView.getMapAsync { map ->
-                map.addOnMapClickListener { latLng ->
-                    onMapClick(latLng.latitude to latLng.longitude)
+                map.addOnMapLongClickListener { latLng ->
+                    onMapLongPress(latLng.latitude to latLng.longitude)
                     true
                 }
                 map.setStyle(Style.Builder().fromUri(OPENFREEMAP_LIBERTY_STYLE_URL)) { style ->
@@ -107,6 +119,7 @@ fun UprunnerMap(
                     renderWaypointPreviewLine(style, waypoints)
                     renderPlannedRoute(style, plannedRoutePoints)
                     renderWaypoints(style, waypoints)
+                    renderPendingPoint(style, pendingPoint)
                     if (track != null) {
                         fitCameraToPoints(map, track.points.map { it.latitude to it.longitude })
                     } else {
@@ -126,6 +139,7 @@ fun UprunnerMap(
                 renderWaypointPreviewLine(style, waypoints)
                 renderPlannedRoute(style, plannedRoutePoints)
                 renderWaypoints(style, waypoints)
+                renderPendingPoint(style, pendingPoint)
                 track?.let { fitCameraToPoints(map, it.points.map { p -> p.latitude to p.longitude }) }
             }
         },
@@ -177,19 +191,59 @@ private fun renderLine(style: Style, sourceId: String, layerId: String, colorHex
     style.addLayer(layer)
 }
 
+/** Komoot's convention: first waypoint is "A", last is "B", anything in between is numbered
+ *  starting at 2 (the 2nd waypoint overall). */
+private fun waypointLabel(index: Int, total: Int): String = when {
+    index == 0 -> "A"
+    index == total - 1 -> "B"
+    else -> (index + 1).toString()
+}
+
 private fun renderWaypoints(style: Style, waypoints: List<Pair<Double, Double>>) {
+    style.getLayer(WAYPOINTS_LABEL_LAYER_ID)?.let { style.removeLayer(it) }
     style.getLayer(WAYPOINTS_CIRCLE_LAYER_ID)?.let { style.removeLayer(it) }
     style.getSource(WAYPOINTS_SOURCE_ID)?.let { style.removeSource(it) }
     if (waypoints.isEmpty()) return
 
-    val features = waypoints.map { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) }
+    val features = waypoints.mapIndexed { index, (lat, lon) ->
+        val properties = JsonObject().apply { addProperty("label", waypointLabel(index, waypoints.size)) }
+        Feature.fromGeometry(Point.fromLngLat(lon, lat), properties)
+    }
     style.addSource(GeoJsonSource(WAYPOINTS_SOURCE_ID, FeatureCollection.fromFeatures(features)))
     style.addLayer(
         CircleLayer(WAYPOINTS_CIRCLE_LAYER_ID, WAYPOINTS_SOURCE_ID).withProperties(
             PropertyFactory.circleColor("#FF6D00"),
-            PropertyFactory.circleRadius(6f),
+            PropertyFactory.circleRadius(11f),
             PropertyFactory.circleStrokeColor("#FFFFFF"),
             PropertyFactory.circleStrokeWidth(2f),
+        ),
+    )
+    style.addLayer(
+        SymbolLayer(WAYPOINTS_LABEL_LAYER_ID, WAYPOINTS_SOURCE_ID).withProperties(
+            PropertyFactory.textField(Expression.get("label")),
+            PropertyFactory.textSize(12f),
+            PropertyFactory.textColor("#FFFFFF"),
+            PropertyFactory.textAllowOverlap(true),
+            PropertyFactory.textIgnorePlacement(true),
+        ),
+    )
+}
+
+/** A distinct marker for a long-pressed point still awaiting the user's choice in the "New
+ *  Waypoint" sheet — visible confirmation that the press registered, before anything commits. */
+private fun renderPendingPoint(style: Style, point: Pair<Double, Double>?) {
+    style.getLayer(PENDING_POINT_CIRCLE_LAYER_ID)?.let { style.removeLayer(it) }
+    style.getSource(PENDING_POINT_SOURCE_ID)?.let { style.removeSource(it) }
+    if (point == null) return
+
+    val feature = Feature.fromGeometry(Point.fromLngLat(point.second, point.first))
+    style.addSource(GeoJsonSource(PENDING_POINT_SOURCE_ID, feature))
+    style.addLayer(
+        CircleLayer(PENDING_POINT_CIRCLE_LAYER_ID, PENDING_POINT_SOURCE_ID).withProperties(
+            PropertyFactory.circleColor("#E53935"),
+            PropertyFactory.circleRadius(9f),
+            PropertyFactory.circleStrokeColor("#FFFFFF"),
+            PropertyFactory.circleStrokeWidth(3f),
         ),
     )
 }

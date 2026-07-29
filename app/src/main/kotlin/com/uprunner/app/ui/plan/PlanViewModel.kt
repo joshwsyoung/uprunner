@@ -13,6 +13,7 @@ import com.uprunner.core.model.GpxPoint
 import com.uprunner.core.model.GpxTrack
 import com.uprunner.core.pace.GeoUtils
 import com.uprunner.core.routing.RouteGeometry
+import com.uprunner.core.routing.RouteStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +31,15 @@ enum class PlanMode { VIEW, PLAN }
 
 private const val WAYPOINT_SNAP_THRESHOLD_METERS = 30.0
 
+/** A long-pressed point awaiting the user's choice in the "New Waypoint" sheet (Komoot's
+ *  flow) — [suggestedInsertionIndex] is pre-computed so the sheet can default the "insert here
+ *  vs. append to end" radio choice to whatever's geometrically sensible. */
+data class PendingWaypoint(
+    val point: Pair<Double, Double>,
+    val distanceToNearestWaypointMeters: Double?,
+    val suggestedInsertionIndex: Int?,
+)
+
 data class PlanUiState(
     val mode: PlanMode = PlanMode.VIEW,
     val routeId: String? = null,
@@ -40,9 +50,18 @@ data class PlanUiState(
     val offlineDownloadStatus: String? = null,
     val waypoints: List<Pair<Double, Double>> = emptyList(),
     val plannedRoutePoints: List<Pair<Double, Double>> = emptyList(),
+    val followWays: Boolean = true,
+    val pendingWaypoint: PendingWaypoint? = null,
+    val insertAsMiddle: Boolean = false,
     val isRouting: Boolean = false,
     val routingError: String? = null,
-)
+) {
+    val routeStats: RouteStats.Summary?
+        get() {
+            val points = if (followWays) plannedRoutePoints else waypoints
+            return if (points.size < 2) null else RouteStats.summarize(points)
+        }
+}
 
 class PlanViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -65,6 +84,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 routeId = null,
                 waypoints = emptyList(),
                 plannedRoutePoints = emptyList(),
+                pendingWaypoint = null,
                 routingError = null,
                 isRouting = false,
             )
@@ -74,29 +94,96 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelPlanning() {
         routingJob?.cancel()
         _uiState.update {
-            it.copy(mode = PlanMode.VIEW, waypoints = emptyList(), plannedRoutePoints = emptyList(), routingError = null, isRouting = false)
+            it.copy(
+                mode = PlanMode.VIEW,
+                waypoints = emptyList(),
+                plannedRoutePoints = emptyList(),
+                pendingWaypoint = null,
+                routingError = null,
+                isRouting = false,
+            )
         }
     }
 
-    /** Only acts while in [PlanMode.PLAN]; a tap in [PlanMode.VIEW] is just browsing the map. */
-    fun handleMapTap(point: Pair<Double, Double>) {
+    /** Long-press stages a point for confirmation (Komoot's "New Waypoint" sheet) rather than
+     *  committing it immediately — a tap (or a long-press outside [PlanMode.PLAN]) does nothing. */
+    fun handleMapLongPress(point: Pair<Double, Double>) {
         if (_uiState.value.mode != PlanMode.PLAN) return
 
-        val currentWaypoints = _uiState.value.waypoints
-        val insertionIndex = RouteGeometry.nearestSegmentInsertionIndex(currentWaypoints, point, WAYPOINT_SNAP_THRESHOLD_METERS)
-        val waypoints = if (insertionIndex != null) {
-            currentWaypoints.toMutableList().apply { add(insertionIndex, point) }
+        val waypoints = _uiState.value.waypoints
+        val suggestedIndex = if (waypoints.size >= 2) {
+            RouteGeometry.nearestSegmentInsertionIndex(waypoints, point, WAYPOINT_SNAP_THRESHOLD_METERS)
         } else {
-            currentWaypoints + point
+            null
+        }
+        val distanceToNearest = waypoints.minOfOrNull {
+            GeoUtils.haversineDistanceMeters(it.first, it.second, point.first, point.second)
         }
 
-        _uiState.update { it.copy(waypoints = waypoints, routingError = null) }
-        if (waypoints.size >= 2) requestRoute(waypoints)
+        _uiState.update {
+            it.copy(
+                pendingWaypoint = PendingWaypoint(point, distanceToNearest, suggestedIndex),
+                insertAsMiddle = suggestedIndex != null,
+            )
+        }
+    }
+
+    fun setInsertAsMiddle(value: Boolean) {
+        _uiState.update { it.copy(insertAsMiddle = value) }
+    }
+
+    fun dismissPendingWaypoint() {
+        _uiState.update { it.copy(pendingWaypoint = null) }
+    }
+
+    /** Commits the staged [PendingWaypoint] — the same action backs "Start Here", "Set as End
+     *  Point", and "Add to Route", since which one is shown depends only on how many waypoints
+     *  already exist (see PlanScreen). */
+    fun confirmPendingWaypoint() {
+        val pending = _uiState.value.pendingWaypoint ?: return
+        val current = _uiState.value.waypoints
+        val insertionIndex = pending.suggestedInsertionIndex
+
+        val updated = if (current.size >= 2 && _uiState.value.insertAsMiddle && insertionIndex != null) {
+            current.toMutableList().apply { add(insertionIndex, pending.point) }
+        } else {
+            current + pending.point
+        }
+
+        _uiState.update { it.copy(waypoints = updated, pendingWaypoint = null, routingError = null) }
+        updateRouteForWaypoints(updated)
+    }
+
+    fun undoLastWaypoint() {
+        val updated = _uiState.value.waypoints.dropLast(1)
+        _uiState.update { it.copy(waypoints = updated) }
+        updateRouteForWaypoints(updated)
+    }
+
+    fun setFollowWays(value: Boolean) {
+        _uiState.update { it.copy(followWays = value) }
+        updateRouteForWaypoints(_uiState.value.waypoints)
     }
 
     fun clearWaypoints() {
         routingJob?.cancel()
-        _uiState.update { it.copy(waypoints = emptyList(), plannedRoutePoints = emptyList(), routingError = null, isRouting = false) }
+        _uiState.update {
+            it.copy(waypoints = emptyList(), plannedRoutePoints = emptyList(), pendingWaypoint = null, routingError = null, isRouting = false)
+        }
+    }
+
+    private fun updateRouteForWaypoints(waypoints: List<Pair<Double, Double>>) {
+        if (waypoints.size < 2) {
+            routingJob?.cancel()
+            _uiState.update { it.copy(plannedRoutePoints = emptyList(), isRouting = false) }
+            return
+        }
+        if (_uiState.value.followWays) requestRoute(waypoints) else useStraightLineRoute(waypoints)
+    }
+
+    private fun useStraightLineRoute(waypoints: List<Pair<Double, Double>>) {
+        routingJob?.cancel()
+        _uiState.update { it.copy(plannedRoutePoints = waypoints, isRouting = false, routingError = null) }
     }
 
     private fun requestRoute(waypoints: List<Pair<Double, Double>>) {
@@ -117,10 +204,11 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         else -> "Couldn't find a route between those points. Try placing a waypoint closer to a road or trail."
     }
 
-    /** Persists the currently planned (routed) waypoint path through the same Route/Split
-     *  tables a loaded GPX file uses, via [GpxWriter] so it round-trips identically. */
+    /** Persists the currently planned route through the same Route/Split tables a loaded GPX
+     *  file uses, via [GpxWriter] so it round-trips identically. */
     fun savePlannedRoute() {
-        val points = _uiState.value.plannedRoutePoints
+        val state = _uiState.value
+        val points = if (state.followWays) state.plannedRoutePoints else state.waypoints
         if (points.size < 2) return
 
         viewModelScope.launch(Dispatchers.IO) {
